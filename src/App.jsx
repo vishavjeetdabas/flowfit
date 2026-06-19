@@ -3,12 +3,14 @@ import {
   Dumbbell, Ruler, BarChart3, History, Plus, Minus, Check, ChevronDown,
   ChevronUp, Flame, Calendar, Award, Target, Clock, SkipForward, Edit3,
   Trash2, RotateCcw, MessageSquare, Zap, ArrowUp, ArrowDown, TrendingUp,
-  Cloud, CloudOff, LogIn, LogOut, Loader
+  Cloud, CloudOff, LogIn, LogOut, Loader, Sparkles, Brain, RefreshCw
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine, Tooltip, Area, AreaChart
 } from "recharts";
 import { useFirebaseSync } from "./useFirebaseSync";
+import AiCoach from "./AiCoach";
+import { hasApiKey, buildContext, chatComplete, SYSTEM_PROMPTS } from "./openai";
 
 /* ---------------- plan ---------------- */
 const DEFAULT_DAYS = [
@@ -176,6 +178,10 @@ export default function App() {
   // history
   const [openSession, setOpenSession] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+
+  // AI features
+  const [aiTips, setAiTips] = useState({}); // { exerciseName: { text, loading } }
+  const [aiInsights, setAiInsights] = useState({ text: "", loading: false, ts: 0 });
 
   // Load initial data (from cloud if signed in, localStorage otherwise)
   useEffect(() => {
@@ -452,6 +458,33 @@ export default function App() {
                                   <button className="restbtn" onClick={() => startRest(lastRest)}><Clock size={16} /></button>
                                 </div>
                               ))}
+                              {/* AI Exercise Tip */}
+                              <button
+                                className={"aitipbtn " + (aiTips[ex.n]?.loading ? "loading" : "")}
+                                disabled={aiTips[ex.n]?.loading}
+                                onClick={async () => {
+                                  if (aiTips[ex.n]?.text) { setAiTips((p) => ({ ...p, [ex.n]: undefined })); return; }
+                                  if (!hasApiKey()) { flash("Set your OpenAI key first (tap ✨ button)"); return; }
+                                  setAiTips((p) => ({ ...p, [ex.n]: { text: "", loading: true } }));
+                                  try {
+                                    const lastEx = lastForExercise(ex.n);
+                                    const history = lastEx ? lastEx.sets.map((s) => `${s.weight}kg×${s.reps}`).join(", ") : "no history yet";
+                                    const ctx = buildContext(plan, logs, body, notes, { exerciseName: ex.n, exerciseHistory: history });
+                                    const tip = await chatComplete([{ role: "user", content: `Give me tips for: ${ex.n}` }], SYSTEM_PROMPTS.exerciseTip(ctx));
+                                    setAiTips((p) => ({ ...p, [ex.n]: { text: tip, loading: false } }));
+                                  } catch (err) {
+                                    setAiTips((p) => ({ ...p, [ex.n]: { text: `⚠️ ${err.message}`, loading: false } }));
+                                  }
+                                }}
+                              >
+                                <Sparkles size={13} />
+                                {aiTips[ex.n]?.text ? "Hide tip" : aiTips[ex.n]?.loading ? "Thinking…" : "AI tip"}
+                              </button>
+                              {aiTips[ex.n]?.text && (
+                                <div className="aitipbox">
+                                  {aiTips[ex.n].text}
+                                </div>
+                              )}
                               <div className="noterow">
                                 <MessageSquare size={13} />
                                 <textarea className="exnote" placeholder="Form cues, how it felt…" value={notes[ex.n] || ""} onChange={(e) => setNotes((p) => ({ ...p, [ex.n]: e.target.value }))} />
@@ -537,6 +570,47 @@ export default function App() {
         {/* ---------- PROGRESS ---------- */}
         {tab === "progress" && (
           <div className="page" key="progress">
+            {/* AI Insights Card */}
+            <div className="card chartcard aiinsights-card">
+              <div className="cardlabel">
+                <Brain size={15} /> AI Insights
+                <button className="airefresh" onClick={async () => {
+                  if (!hasApiKey()) { flash("Set your OpenAI key first (tap ✨ button)"); return; }
+                  setAiInsights({ text: "", loading: true, ts: 0 });
+                  try {
+                    const ctx = buildContext(plan, logs, body, notes);
+                    const result = await chatComplete([{ role: "user", content: "Give me my weekly workout analysis and insights." }], SYSTEM_PROMPTS.insights(ctx));
+                    setAiInsights({ text: result, loading: false, ts: Date.now() });
+                  } catch (err) {
+                    setAiInsights({ text: `⚠️ ${err.message}`, loading: false, ts: 0 });
+                  }
+                }}><RefreshCw size={13} className={aiInsights.loading ? "spinning" : ""} /></button>
+              </div>
+              {aiInsights.loading ? (
+                <div className="prempty" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Loader size={14} className="spinning" /> Analyzing your workouts…
+                </div>
+              ) : aiInsights.text ? (
+                <div className="aiinsights-text">{aiInsights.text}</div>
+              ) : (
+                <div className="prempty">
+                  <button className="aiinsights-gen" onClick={async () => {
+                    if (!hasApiKey()) { flash("Set your OpenAI key first (tap ✨ button)"); return; }
+                    setAiInsights({ text: "", loading: true, ts: 0 });
+                    try {
+                      const ctx = buildContext(plan, logs, body, notes);
+                      const result = await chatComplete([{ role: "user", content: "Give me my weekly workout analysis and insights." }], SYSTEM_PROMPTS.insights(ctx));
+                      setAiInsights({ text: result, loading: false, ts: Date.now() });
+                    } catch (err) {
+                      setAiInsights({ text: `⚠️ ${err.message}`, loading: false, ts: 0 });
+                    }
+                  }}>
+                    <Sparkles size={14} /> Generate AI Insights
+                  </button>
+                </div>
+              )}
+            </div>
+
             <div className="statgrid">
               <div className="card stat"><Flame size={19} /><b>{Math.round(animStreak)}</b><span>day streak</span></div>
               <div className="card stat"><Calendar size={19} /><b>{Math.round(animWeek)}<small>/6</small></b><span>this week</span></div>
@@ -650,6 +724,8 @@ export default function App() {
       )}
 
       {toast && <div className="toast">{toast}</div>}
+
+      <AiCoach plan={plan} logs={logs} body={body} notes={notes} />
 
       <nav className="tabbar">
         {[["today", Dumbbell, "Today"], ["body", Ruler, "Body"], ["progress", BarChart3, "Progress"], ["history", History, "History"]].map(([k, Icon, label]) => (
@@ -866,4 +942,76 @@ const CSS = `
 .authbtn:active { transform: scale(.95); }
 .authbtn.signin { background: #221d17; color: #f3ecdf; border-color: #221d17; }
 .avatar { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }
+
+/* ─── AI Exercise Tips ─── */
+.aitipbtn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 11px; border: 1px solid rgba(168,122,78,.25); background: linear-gradient(135deg, rgba(168,122,78,.08), rgba(168,122,78,.15)); color: #a87a4e; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all .2s; font-family: inherit; }
+.aitipbtn:hover { background: linear-gradient(135deg, rgba(168,122,78,.15), rgba(168,122,78,.22)); }
+.aitipbtn:active { transform: scale(.96); }
+.aitipbtn.loading { opacity: .7; cursor: wait; }
+.aitipbox { background: linear-gradient(135deg, rgba(168,122,78,.06), rgba(168,122,78,.12)); border: 1px solid rgba(168,122,78,.18); border-radius: 13px; padding: 12px 14px; font-size: 13px; line-height: 1.6; color: #4a4238; white-space: pre-wrap; animation: rise .3s ease; }
+
+/* ─── AI Insights ─── */
+.aiinsights-card { position: relative; }
+.airefresh { margin-left: auto; background: none; border: none; color: #9a8c78; cursor: pointer; padding: 4px; border-radius: 8px; transition: .2s; display: flex; align-items: center; }
+.airefresh:hover { color: #a87a4e; background: rgba(168,122,78,.08); }
+.aiinsights-text { font-size: 13.5px; line-height: 1.65; color: #4a4238; white-space: pre-wrap; }
+.aiinsights-gen { display: flex; align-items: center; gap: 7px; padding: 11px 20px; border-radius: 13px; border: 1.5px solid rgba(168,122,78,.3); background: linear-gradient(135deg, rgba(168,122,78,.06), rgba(168,122,78,.14)); color: #a87a4e; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all .2s; font-family: inherit; margin: 6px auto; }
+.aiinsights-gen:hover { background: linear-gradient(135deg, rgba(168,122,78,.14), rgba(168,122,78,.22)); transform: translateY(-1px); }
+.aiinsights-gen:active { transform: scale(.97); }
+
+/* ─── AI Coach FAB ─── */
+@keyframes pulse-glow { 0%, 100% { box-shadow: 0 4px 20px rgba(168,122,78,.35); } 50% { box-shadow: 0 4px 28px rgba(168,122,78,.55); } }
+.aifab { position: fixed; bottom: 82px; right: 18px; z-index: 16; width: 52px; height: 52px; border-radius: 50%; border: none; background: linear-gradient(135deg, #c9a079, #a87a4e); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 20px rgba(168,122,78,.35); transition: transform .25s cubic-bezier(.34,1.4,.64,1), opacity .2s; animation: pulse-glow 3s ease-in-out infinite; }
+.aifab:active { transform: scale(.9); }
+.aifab.hide { opacity: 0; pointer-events: none; transform: scale(.5); }
+
+/* ─── AI Chat Panel ─── */
+@keyframes slideUp { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
+.aipanel { position: fixed; bottom: 0; left: 0; right: 0; z-index: 25; height: 75vh; max-height: 600px; display: flex; flex-direction: column; background: rgba(243,236,223,.96); backdrop-filter: blur(30px) saturate(150%); -webkit-backdrop-filter: blur(30px) saturate(150%); border-top-left-radius: 24px; border-top-right-radius: 24px; box-shadow: 0 -8px 40px rgba(34,29,23,.18); animation: slideUp .35s cubic-bezier(.22,1,.36,1); }
+.aiheader { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid rgba(34,29,23,.08); flex-shrink: 0; }
+.aiheadleft { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #a87a4e; }
+.aiheadright { display: flex; align-items: center; gap: 4px; }
+.aikeybtn { background: none; border: none; color: #9a8c78; cursor: pointer; padding: 6px; border-radius: 8px; display: flex; align-items: center; }
+.aikeybtn:hover { background: rgba(34,29,23,.06); color: #6f6151; }
+.aiclosebtn { background: none; border: none; color: #6f6151; cursor: pointer; padding: 4px; border-radius: 8px; display: flex; align-items: center; }
+.aiclosebtn:hover { background: rgba(34,29,23,.06); }
+
+.aimessages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: rgba(34,29,23,.12) transparent; }
+.aimsg { display: flex; }
+.aimsg.user { justify-content: flex-end; }
+.aimsg.assistant { justify-content: flex-start; }
+.aimsgbubble { max-width: 85%; padding: 11px 15px; border-radius: 18px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.aimsg.user .aimsgbubble { background: #221d17; color: #f3ecdf; border-bottom-right-radius: 6px; }
+.aimsg.assistant .aimsgbubble { background: rgba(255,253,249,.85); border: 1px solid rgba(34,29,23,.08); color: #4a4238; border-bottom-left-radius: 6px; box-shadow: 0 2px 8px rgba(95,68,32,.06); }
+@keyframes dotpulse { 0%, 60% { opacity: .3; } 30% { opacity: 1; } }
+.aidots { letter-spacing: 3px; animation: dotpulse 1.4s infinite; }
+
+.aiquick { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; flex-shrink: 0; }
+.aiquickbtn { padding: 8px 13px; border-radius: 12px; border: 1px solid rgba(168,122,78,.25); background: rgba(168,122,78,.06); color: #a87a4e; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .2s; font-family: inherit; }
+.aiquickbtn:hover { background: rgba(168,122,78,.15); }
+.aiquickbtn:disabled { opacity: .5; cursor: not-allowed; }
+
+.aiinputrow { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid rgba(34,29,23,.08); flex-shrink: 0; background: rgba(243,236,223,.5); }
+.aiinput { flex: 1; padding: 11px 14px; border-radius: 14px; border: 1px solid rgba(34,29,23,.12); background: rgba(255,253,249,.8); color: #221d17; font-size: 14px; outline: none; font-family: inherit; }
+.aiinput::placeholder { color: #b0a288; }
+.aisendbtn { width: 40px; height: 40px; border-radius: 50%; border: none; background: linear-gradient(135deg, #c9a079, #a87a4e); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform .2s, opacity .2s; flex-shrink: 0; }
+.aisendbtn:active { transform: scale(.9); }
+.aisendbtn.disabled { opacity: .5; cursor: not-allowed; }
+
+/* ─── API Key Modal ─── */
+.aimodal-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(34,29,23,.45); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; animation: rise .2s ease; }
+.aimodal { background: #fffdf9; border-radius: 22px; padding: 24px; width: calc(100% - 40px); max-width: 380px; box-shadow: 0 20px 60px rgba(34,29,23,.25); }
+.aimodal-title { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; color: #221d17; margin-bottom: 8px; }
+.aimodal-desc { font-size: 13px; color: #8a7b67; line-height: 1.5; margin: 0 0 14px; }
+.aimodal-input { width: 100%; padding: 12px 14px; border-radius: 13px; border: 1px solid rgba(34,29,23,.15); background: rgba(34,29,23,.03); color: #221d17; font-size: 14px; font-family: monospace; outline: none; box-sizing: border-box; }
+.aimodal-input:focus { border-color: #a87a4e; }
+.aimodal-status { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; margin-top: 8px; }
+.aimodal-status.good { color: #5a8a5e; }
+.aimodal-status.bad { color: #b4452f; }
+.aimodal-actions { display: flex; gap: 8px; margin-top: 16px; }
+.aimodal-cancel { flex: 1; padding: 12px; border-radius: 13px; border: 1px solid rgba(34,29,23,.12); background: none; color: #6f6151; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.aimodal-save { flex: 1; padding: 12px; border-radius: 13px; border: none; background: #221d17; color: #f3ecdf; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; transition: opacity .2s; }
+.aimodal-save:disabled { opacity: .5; cursor: not-allowed; }
+.aimodal-save.loading { opacity: .7; }
+.aimodal-current { font-size: 11.5px; color: #9a8c78; margin-top: 12px; text-align: center; }
 `;
