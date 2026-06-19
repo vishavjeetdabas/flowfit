@@ -1,0 +1,15 @@
+{
+  "name": "Forge — Workout Tracker",
+  "short_name": "Forge",
+  "description": "Personal workout, body and progress tracker.",
+  "start_url": "/flowfit/",
+  "scope": "/flowfit/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ece3d5",
+  "theme_color": "#ece3d5",
+  "icons": [
+    { "src": "/flowfit/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/flowfit/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
