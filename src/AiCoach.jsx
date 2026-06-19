@@ -142,16 +142,14 @@ export default function AiCoach({ plan, logs, body, notes }) {
             ))}
           </div>
 
-          {/* Quick prompts (show only when few messages) */}
-          {messages.length <= 1 && (
-            <div className="aiquick">
-              {QUICK_PROMPTS.map((p) => (
-                <button key={p} className="aiquickbtn" onClick={() => sendMessage(p)} disabled={streaming}>
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Quick prompts — always visible for easy re-use */}
+          <div className="aiquick">
+            {QUICK_PROMPTS.map((p) => (
+              <button key={p} className="aiquickbtn" onClick={() => sendMessage(p)} disabled={streaming}>
+                {p}
+              </button>
+            ))}
+          </div>
 
           <div className="aiinputrow">
             <input

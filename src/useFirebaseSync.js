@@ -36,6 +36,7 @@ const STORE_KEYS = {
   ff_logs: "logs",
   ff_body: "body",
   ff_notes: "notes",
+  ff_meta: "meta",
 };
 
 function userDocRef(uid, collection) {
@@ -205,6 +206,7 @@ export function useFirebaseSync() {
     user,
     authLoading,
     syncStatus,
+    firebaseConfigured: isFirebaseConfigured(),
     signIn,
     signOut,
     mergeLocalToCloud,

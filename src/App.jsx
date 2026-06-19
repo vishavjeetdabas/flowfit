@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback, lazy, Suspense } from "react";
 import {
   Dumbbell, Ruler, BarChart3, History, Plus, Minus, Check, ChevronDown,
   ChevronUp, Flame, Calendar, Award, Target, Clock, SkipForward, Edit3,
@@ -9,8 +9,9 @@ import {
   LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine, Tooltip, Area, AreaChart
 } from "recharts";
 import { useFirebaseSync } from "./useFirebaseSync";
-import AiCoach from "./AiCoach";
 import { hasApiKey, buildContext, chatComplete, SYSTEM_PROMPTS } from "./openai";
+
+const AiCoach = lazy(() => import("./AiCoach"));
 
 /* ---------------- plan ---------------- */
 const DEFAULT_DAYS = [
@@ -57,7 +58,7 @@ const REST_PRESETS = [60, 90, 120, 180];
 const METRICS = [
   { k: "weight", label: "Weight", unit: "kg", goal: true },
   { k: "chest", label: "Chest", unit: "cm" },
-  { k: "bicep", label: "Bicep", unit: "cm" },
+  { k: "bicep", label: "Biceps", unit: "cm" },
   { k: "waist", label: "Waist", unit: "cm" },
 ];
 
@@ -104,13 +105,14 @@ function useCountUp(value, dur = 550) {
 /* ---------------- inputs ---------------- */
 function NumField({ value, onChange, step, label }) {
   const num = parseFloat(value) || 0;
+  const lower = label.toLowerCase();
   return (
     <div className="numwrap">
       <span className="numlabel">{label}</span>
       <div className="numfield">
-        <button onClick={() => onChange(String(+Math.max(0, num - step).toFixed(2)))}><Minus size={15} /></button>
-        <input inputMode="decimal" value={value} placeholder="0" onChange={(e) => onChange(e.target.value)} />
-        <button onClick={() => onChange(String(+(num + step).toFixed(2)))}><Plus size={15} /></button>
+        <button type="button" aria-label={`Decrease ${lower}`} onClick={() => onChange(String(+Math.max(0, num - step).toFixed(2)))}><Minus size={15} /></button>
+        <input inputMode="decimal" aria-label={label} value={value} placeholder="0" onChange={(e) => onChange(e.target.value)} />
+        <button type="button" aria-label={`Increase ${lower}`} onClick={() => onChange(String(+(num + step).toFixed(2)))}><Plus size={15} /></button>
       </div>
     </div>
   );
@@ -118,10 +120,10 @@ function NumField({ value, onChange, step, label }) {
 function Seg({ items, value, onChange }) {
   const i = Math.max(0, items.findIndex((x) => x.k === value));
   return (
-    <div className="seg">
-      <div className="segpill" style={{ width: `calc(${100 / items.length}% - 4px)`, transform: `translateX(${i * 100}%)` }} />
+    <div className="seg" aria-label="Choose body metric">
+      <div className="segpill" style={{ width: `calc((100% - 8px) / ${items.length})`, transform: `translateX(${i * 100}%)` }} />
       {items.map((x) => (
-        <button key={x.k} className={"segbtn " + (x.k === value ? "on" : "")} onClick={() => onChange(x.k)}>{x.label}</button>
+        <button key={x.k} type="button" aria-pressed={x.k === value} className={"segbtn " + (x.k === value ? "on" : "")} onClick={() => onChange(x.k)}>{x.label}</button>
       ))}
     </div>
   );
@@ -151,7 +153,7 @@ function Collapse({ open, children }) {
 
 export default function App() {
   const firebase = useFirebaseSync();
-  const { user, authLoading, syncStatus, signIn, signOut, mergeLocalToCloud, subscribe, writeToCloud, readStore, readLocal } = firebase;
+  const { user, authLoading, syncStatus, signIn, signOut, firebaseConfigured, mergeLocalToCloud, subscribe, writeToCloud, readStore, readLocal } = firebase;
 
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("today");
@@ -159,7 +161,9 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [body, setBody] = useState({ weight: [], chest: [], bicep: [], waist: [] });
   const [notes, setNotes] = useState({});
-  const meta = { start: 84, goal: 78 };
+  const [meta, setMeta] = useState({ start: 84, goal: 78 });
+  const [editGoal, setEditGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState({ start: "", goal: "" });
   const [selectedKey, setSelectedKey] = useState(WEEK_MAP[new Date().getDay()]);
   const [draft, setDraft] = useState({});
   const [openEx, setOpenEx] = useState(null);
@@ -178,6 +182,7 @@ export default function App() {
   // history
   const [openSession, setOpenSession] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [confirmWorkout, setConfirmWorkout] = useState(false);
 
   // AI features
   const [aiTips, setAiTips] = useState({}); // { exerciseName: { text, loading } }
@@ -200,6 +205,8 @@ export default function App() {
         const old = readLocal("ff_weights", []);
         setBody({ weight: old.map((w) => ({ date: w.date, v: w.weight })), chest: [], bicep: [], waist: [] });
       }
+      const fm = await readStore("ff_meta", null);
+      if (fm) setMeta(fm);
       setLoaded(true);
     })();
   }, [authLoading, user]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -212,6 +219,7 @@ export default function App() {
       subscribe("ff_logs", [], setLogs),
       subscribe("ff_body", { weight: [], chest: [], bicep: [], waist: [] }, setBody),
       subscribe("ff_notes", {}, setNotes),
+      subscribe("ff_meta", { start: 84, goal: 78 }, setMeta),
     ];
     return () => unsubs.forEach((u) => u && u());
   }, [loaded, user, subscribe]);
@@ -221,9 +229,17 @@ export default function App() {
   useEffect(() => { if (loaded) writeToCloud("ff_logs", logs); }, [logs, loaded]); // eslint-disable-line
   useEffect(() => { if (loaded) writeToCloud("ff_body", body); }, [body, loaded]); // eslint-disable-line
   useEffect(() => { if (loaded) writeToCloud("ff_notes", notes); }, [notes, loaded]); // eslint-disable-line
+  useEffect(() => { if (loaded) writeToCloud("ff_meta", meta); }, [meta, loaded]); // eslint-disable-line
   useEffect(() => () => clearInterval(timerRef.current), []);
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 1700); };
+  const handleSignIn = () => {
+    if (!firebaseConfigured) {
+      flash("Cloud sync is not configured yet");
+      return;
+    }
+    signIn();
+  };
 
   /* rest timer */
   const startRest = (sec) => {
@@ -359,17 +375,19 @@ export default function App() {
             </div>
           </div>
           <div className="headright">
-            <div className={"syncbadge " + syncStatus}>
-              {syncStatus === "synced" ? <Cloud size={13} /> : syncStatus === "syncing" ? <Loader size={13} className="spinning" /> : syncStatus === "offline" ? <CloudOff size={13} /> : null}
-              <span>{syncStatus === "synced" ? "Synced" : syncStatus === "syncing" ? "Syncing" : syncStatus === "offline" ? "Offline" : "Local"}</span>
-            </div>
+            {user && (
+              <div className={"syncbadge " + syncStatus} aria-live="polite">
+                {syncStatus === "synced" ? <Cloud size={13} /> : syncStatus === "syncing" ? <Loader size={13} className="spinning" /> : syncStatus === "offline" ? <CloudOff size={13} /> : null}
+                <span>{syncStatus === "synced" ? "Synced" : syncStatus === "syncing" ? "Syncing" : "Offline"}</span>
+              </div>
+            )}
             {user ? (
-              <button className="authbtn" onClick={signOut} title="Sign out">
+              <button type="button" className="authbtn" onClick={signOut} title="Sign out" aria-label="Sign out of cloud sync">
                 {user.photoURL ? <img src={user.photoURL} alt="" className="avatar" referrerPolicy="no-referrer" /> : <LogOut size={16} />}
               </button>
             ) : (
-              <button className="authbtn signin" onClick={signIn} title="Sign in with Google">
-                <LogIn size={15} /><span>Sync</span>
+              <button type="button" className="authbtn signin" onClick={handleSignIn} title={firebaseConfigured ? "Sign in with Google" : "Cloud sync is not configured"} aria-label={firebaseConfigured ? "Sign in with Google to sync" : "Cloud sync is not configured"}>
+                <LogIn size={15} /><span>{firebaseConfigured ? "Sync" : "Local"}</span>
               </button>
             )}
           </div>
@@ -378,9 +396,9 @@ export default function App() {
         {/* ---------- TODAY ---------- */}
         {tab === "today" && (
           <div className="page" key="today">
-            <div className="dayrow">
+            <div className="dayrow" aria-label="Choose workout day">
               {plan.map((d) => (
-                <button key={d.key} onClick={() => { setSelectedKey(d.key); setEditMode(false); }}
+                <button key={d.key} type="button" aria-pressed={selectedKey === d.key} onClick={() => { setSelectedKey(d.key); setEditMode(false); }}
                   className={"daypill " + (selectedKey === d.key ? "active" : "")}>{d.name}</button>
               ))}
             </div>
@@ -394,7 +412,7 @@ export default function App() {
               <>
                 <div className="dayhead card">
                   <div><h2>{day.name}</h2><span>{day.sub}</span></div>
-                  <button className={"editbtn " + (editMode ? "on" : "")} onClick={() => { setEditMode(!editMode); setOpenEx(null); }}>
+                  <button type="button" className={"editbtn " + (editMode ? "on" : "")} aria-pressed={editMode} onClick={() => { setEditMode(!editMode); setOpenEx(null); }}>
                     {editMode ? <Check size={15} /> : <Edit3 size={15} />}{editMode ? "Done" : "Edit"}
                   </button>
                 </div>
@@ -403,27 +421,27 @@ export default function App() {
                   <>
                     {day.ex.map((ex, idx) => (
                       <div key={idx} className="card editrow">
-                        <input className="editname" value={ex.n} onChange={(e) => patchEx(idx, { n: e.target.value })} />
+                        <input className="editname" aria-label={`Exercise ${idx + 1} name`} value={ex.n} onChange={(e) => patchEx(idx, { n: e.target.value })} />
                         <div className="editline">
                           <div className="editsmall"><span>sets</span>
                             <div className="ministep">
-                              <button onClick={() => patchEx(idx, { s: Math.max(1, ex.s - 1) })}><Minus size={13} /></button>
-                              <b>{ex.s}</b><button onClick={() => patchEx(idx, { s: ex.s + 1 })}><Plus size={13} /></button>
+                              <button type="button" aria-label={`Decrease sets for ${ex.n}`} onClick={() => patchEx(idx, { s: Math.max(1, ex.s - 1) })}><Minus size={13} /></button>
+                              <b>{ex.s}</b><button type="button" aria-label={`Increase sets for ${ex.n}`} onClick={() => patchEx(idx, { s: ex.s + 1 })}><Plus size={13} /></button>
                             </div>
                           </div>
                           <div className="editsmall"><span>reps</span>
-                            <input className="editreps" value={ex.r} onChange={(e) => patchEx(idx, { r: e.target.value })} />
+                            <input className="editreps" aria-label={`Rep range for ${ex.n}`} value={ex.r} onChange={(e) => patchEx(idx, { r: e.target.value })} />
                           </div>
                           <div className="editactions">
-                            <button onClick={() => moveEx(idx, -1)}><ChevronUp size={16} /></button>
-                            <button onClick={() => moveEx(idx, 1)}><ChevronDown size={16} /></button>
-                            <button className="del" onClick={() => delEx(idx)}><Trash2 size={15} /></button>
+                            <button type="button" aria-label={`Move ${ex.n} up`} onClick={() => moveEx(idx, -1)}><ChevronUp size={16} /></button>
+                            <button type="button" aria-label={`Move ${ex.n} down`} onClick={() => moveEx(idx, 1)}><ChevronDown size={16} /></button>
+                            <button type="button" className="del" aria-label={`Delete ${ex.n}`} onClick={() => delEx(idx)}><Trash2 size={15} /></button>
                           </div>
                         </div>
                       </div>
                     ))}
-                    <button className="addex" onClick={addEx}><Plus size={17} /> Add exercise</button>
-                    <button className="resetplan" onClick={resetPlan}><RotateCcw size={13} /> Reset this plan to default</button>
+                    <button type="button" className="addex" onClick={addEx}><Plus size={17} /> Add exercise</button>
+                    <button type="button" className="resetplan" onClick={resetPlan}><RotateCcw size={13} /> Reset full weekly plan to default</button>
                   </>
                 ) : (
                   <>
@@ -434,9 +452,9 @@ export default function App() {
                       const ready = readyToProgress(ex.n, ex.r);
                       return (
                         <div key={ex.n} className={"card exc " + (open ? "open" : "")}>
-                          <button className="exhead" onClick={() => setOpenEx(open ? null : ex.n)}>
+                          <button type="button" className="exhead" aria-expanded={open} onClick={() => setOpenEx(open ? null : ex.n)}>
                             <div className="exleft">
-                              <span className={"exstate " + (exDone(ex.n) ? "on" : "")}>{exDone(ex.n) ? <Check size={12} /> : ""}</span>
+                              <span className={"exstate " + (exDone(ex.n) ? "on" : "")} aria-hidden="true">{exDone(ex.n) ? <Check size={12} /> : ""}</span>
                               <div>
                                 <div className="exname">{ex.n}{hasNote && <MessageSquare size={11} className="noteflag" />}</div>
                                 <div className="exmeta">
@@ -455,11 +473,12 @@ export default function App() {
                                   <span className="setno">{i + 1}</span>
                                   <NumField label="kg" step={2.5} value={s.weight} onChange={(v) => setVal(ex.n, i, "weight", v)} />
                                   <NumField label="reps" step={1} value={s.reps} onChange={(v) => setVal(ex.n, i, "reps", v)} />
-                                  <button className="restbtn" onClick={() => startRest(lastRest)}><Clock size={16} /></button>
+                                  <button type="button" className="restbtn" aria-label={`Start ${mmss(lastRest)} rest timer`} onClick={() => startRest(lastRest)}><Clock size={16} /></button>
                                 </div>
                               ))}
                               {/* AI Exercise Tip */}
                               <button
+                                type="button"
                                 className={"aitipbtn " + (aiTips[ex.n]?.loading ? "loading" : "")}
                                 disabled={aiTips[ex.n]?.loading}
                                 onClick={async () => {
@@ -487,14 +506,23 @@ export default function App() {
                               )}
                               <div className="noterow">
                                 <MessageSquare size={13} />
-                                <textarea className="exnote" placeholder="Form cues, how it felt…" value={notes[ex.n] || ""} onChange={(e) => setNotes((p) => ({ ...p, [ex.n]: e.target.value }))} />
+                                <textarea className="exnote" aria-label={`Notes for ${ex.n}`} placeholder="Form cues, how it felt…" value={notes[ex.n] || ""} onChange={(e) => setNotes((p) => ({ ...p, [ex.n]: e.target.value }))} />
                               </div>
                             </div>
                           </Collapse>
                         </div>
                       );
                     })}
-                    <button className="cta" onClick={completeWorkout}><Check size={18} /> Complete workout</button>
+                    <button
+                      type="button"
+                      className={"cta " + (confirmWorkout ? "confirm" : "")}
+                      onClick={() => {
+                        if (confirmWorkout) { completeWorkout(); setConfirmWorkout(false); }
+                        else { setConfirmWorkout(true); setTimeout(() => setConfirmWorkout(false), 2500); }
+                      }}
+                    >
+                      <Check size={18} /> {confirmWorkout ? "Tap again to save" : "Complete workout"}
+                    </button>
                   </>
                 )}
               </>
@@ -514,7 +542,17 @@ export default function App() {
                   <div className="bwsub">current {mConf.label.toLowerCase()}</div>
                 </div>
                 {mConf.goal
-                  ? <div className="tagline"><Target size={13} /> goal {meta.goal}kg</div>
+                  ? editGoal ? (
+                    <div className="goaleditrow">
+                      <div className="goaleditfield"><span>Start</span><input type="number" inputMode="decimal" value={goalDraft.start} onChange={(e) => setGoalDraft(p => ({ ...p, start: e.target.value }))} placeholder={String(meta.start)} /></div>
+                      <div className="goaleditfield"><span>Goal</span><input type="number" inputMode="decimal" value={goalDraft.goal} onChange={(e) => setGoalDraft(p => ({ ...p, goal: e.target.value }))} placeholder={String(meta.goal)} /></div>
+                      <button type="button" className="goaleditok" onClick={() => { const s = +goalDraft.start, g = +goalDraft.goal; if (s && g) setMeta({ start: s, goal: g }); setEditGoal(false); }}><Check size={14} /></button>
+                    </div>
+                  ) : (
+                    <button type="button" className="tagline goaledittag" onClick={() => { setGoalDraft({ start: String(meta.start), goal: String(meta.goal) }); setEditGoal(true); }}>
+                      <Target size={13} /> goal {meta.goal}kg <Edit3 size={11} />
+                    </button>
+                  )
                   : change != null && <div className={"tagline " + ((change < 0) === goodDown ? "good" : "")}>{change < 0 ? <ArrowDown size={13} /> : <ArrowUp size={13} />}{Math.abs(change)}{mConf.unit} since start</div>}
               </div>
               {mConf.goal && (
@@ -533,12 +571,12 @@ export default function App() {
               <div className="loggerhead">Log {mConf.label.toLowerCase()}</div>
               <div className="loggerrow">
                 <div className="fieldcol"><span className="numlabel">Date</span>
-                  <input type="date" className="dateinput" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
+                  <input type="date" className="dateinput" aria-label="Reading date" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
                 </div>
                 <div className="fieldcol"><span className="numlabel">{mConf.unit}</span>
-                  <input inputMode="decimal" className="valinput" placeholder="0" value={bVal} onChange={(e) => setBVal(e.target.value)} />
+                  <input inputMode="decimal" className="valinput" aria-label={`${mConf.label} value in ${mConf.unit}`} placeholder="0" value={bVal} onChange={(e) => setBVal(e.target.value)} />
                 </div>
-                <button className="addbtn" onClick={addBody}>Save</button>
+                <button type="button" className="addbtn" onClick={addBody}>Save</button>
               </div>
               <div className="hint">Tip: change the date to backfill your old readings.</div>
             </div>
@@ -574,7 +612,7 @@ export default function App() {
             <div className="card chartcard aiinsights-card">
               <div className="cardlabel">
                 <Brain size={15} /> AI Insights
-                <button className="airefresh" onClick={async () => {
+                <button type="button" className="airefresh" aria-label="Refresh AI insights" onClick={async () => {
                   if (!hasApiKey()) { flash("Set your OpenAI key first (tap ✨ button)"); return; }
                   setAiInsights({ text: "", loading: true, ts: 0 });
                   try {
@@ -594,7 +632,7 @@ export default function App() {
                 <div className="aiinsights-text">{aiInsights.text}</div>
               ) : (
                 <div className="prempty">
-                  <button className="aiinsights-gen" onClick={async () => {
+                  <button type="button" className="aiinsights-gen" onClick={async () => {
                     if (!hasApiKey()) { flash("Set your OpenAI key first (tap ✨ button)"); return; }
                     setAiInsights({ text: "", loading: true, ts: 0 });
                     try {
@@ -623,9 +661,12 @@ export default function App() {
                 <div className="prempty">Log a few workouts and your strength curve appears here.</div>
               ) : (
                 <>
-                  <select className="liftsel" value={lift} onChange={(e) => setLift(e.target.value)}>
-                    {loggedExercises.map((n) => <option key={n} value={n}>{n}</option>)}
-                  </select>
+                  <div className="liftselwrap">
+                    <select className="liftsel" aria-label="Choose lift for strength trend" value={lift} onChange={(e) => setLift(e.target.value)}>
+                      {loggedExercises.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <ChevronDown size={14} className="liftselarrow" />
+                  </div>
                   {strengthData.length > 0 ? (
                     <div style={{ height: 180 }}>
                       <ResponsiveContainer width="100%" height="100%">
@@ -673,7 +714,7 @@ export default function App() {
                 const totalSets = l.exercises.reduce((a, e) => a + e.sets.length, 0);
                 return (
                   <div key={l.id} className={"card hist " + (open ? "open" : "")}>
-                    <button className="histhead" onClick={() => setOpenSession(open ? null : l.id)}>
+                    <button type="button" className="histhead" aria-expanded={open} onClick={() => setOpenSession(open ? null : l.id)}>
                       <div>
                         <div className="histday">{l.dayName}</div>
                         <div className="histmeta">{longDate(l.date)} · {l.exercises.length} exercises · {totalSets} sets</div>
@@ -688,7 +729,7 @@ export default function App() {
                             <div className="histsets">{e.sets.map((s, j) => <span key={j}>{s.weight || "—"}×{s.reps || "—"}</span>)}</div>
                           </div>
                         ))}
-                        <button className={"histdel " + (confirmDel === l.id ? "confirm" : "")}
+                        <button type="button" className={"histdel " + (confirmDel === l.id ? "confirm" : "")}
                           onClick={() => { if (confirmDel === l.id) { setLogs((p) => p.filter((x) => x.id !== l.id)); setConfirmDel(null); flash("Session deleted"); } else { setConfirmDel(l.id); setTimeout(() => setConfirmDel((c) => c === l.id ? null : c), 2500); } }}>
                           <Trash2 size={14} /> {confirmDel === l.id ? "Tap again to delete" : "Delete session"}
                         </button>
@@ -714,10 +755,10 @@ export default function App() {
             <span className="rttime">{mmss(timer.remaining)}</span>
           </div>
           <div className="rtright">
-            <div className="rtchips">{REST_PRESETS.map((p) => <button key={p} className="rtchip" onClick={() => startRest(p)}>{p < 120 ? p + "s" : mmss(p)}</button>)}</div>
+            <div className="rtchips">{REST_PRESETS.map((p) => <button key={p} type="button" className="rtchip" aria-label={`Set rest timer to ${mmss(p)}`} onClick={() => startRest(p)}>{p < 120 ? p + "s" : mmss(p)}</button>)}</div>
             <div className="rtactions">
-              <button className="rtbtn" onClick={() => setTimer((t) => t ? { ...t, remaining: t.remaining + 15, total: Math.max(t.total, t.remaining + 15) } : t)}>+15s</button>
-              <button className="rtbtn skip" onClick={skipRest}><SkipForward size={14} /> Skip</button>
+              <button type="button" className="rtbtn" onClick={() => setTimer((t) => t ? { ...t, remaining: t.remaining + 15, total: Math.max(t.total, t.remaining + 15) } : t)}>+15s</button>
+              <button type="button" className="rtbtn skip" onClick={skipRest}><SkipForward size={14} /> Skip</button>
             </div>
           </div>
         </div>
@@ -725,11 +766,13 @@ export default function App() {
 
       {toast && <div className="toast">{toast}</div>}
 
-      <AiCoach plan={plan} logs={logs} body={body} notes={notes} />
+      <Suspense fallback={null}>
+        <AiCoach plan={plan} logs={logs} body={body} notes={notes} />
+      </Suspense>
 
-      <nav className="tabbar">
+      <nav className="tabbar" aria-label="Primary">
         {[["today", Dumbbell, "Today"], ["body", Ruler, "Body"], ["progress", BarChart3, "Progress"], ["history", History, "History"]].map(([k, Icon, label]) => (
-          <button key={k} className={"tab " + (tab === k ? "on" : "")} onClick={() => setTab(k)}><Icon size={21} /><span>{label}</span></button>
+          <button key={k} type="button" className={"tab " + (tab === k ? "on" : "")} aria-current={tab === k ? "page" : undefined} onClick={() => setTab(k)}><Icon size={21} /><span>{label}</span></button>
         ))}
       </nav>
     </div>
@@ -737,15 +780,32 @@ export default function App() {
 }
 
 function Heatmap({ dates }) {
-  const cells = []; const d = new Date(); d.setHours(0,0,0,0); const today = new Date(d); d.setDate(d.getDate() - 41);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dayOfWeek = (today.getDay() + 6) % 7; // 0=Mon … 6=Sun
+  const start = new Date(today);
+  start.setDate(today.getDate() - dayOfWeek - 35); // Monday 6 weeks ago
+  const cells = [];
+  const d = new Date(start);
   for (let i = 0; i < 42; i++) {
     const iso = d.toISOString().slice(0, 10);
-    cells.push({ iso, on: dates.has(iso), isToday: d.getTime() === today.getTime() });
+    cells.push({ iso, on: dates.has(iso), isToday: d.getTime() === today.getTime(), future: d > today });
     d.setDate(d.getDate() + 1);
   }
-  return <div className="heat">{cells.map((c) => (
-    <div key={c.iso} title={c.iso} className={"cell " + (c.on ? "on " : "") + (c.isToday ? "today" : "")} />
-  ))}</div>;
+  return (
+    <div>
+      <div className="heat-header">
+        {["M", "T", "W", "T", "F", "S", "S"].map((l, i) => (
+          <span key={i} className="heat-daylabel">{l}</span>
+        ))}
+      </div>
+      <div className="heat">
+        {cells.map((c) => (
+          <div key={c.iso} title={c.iso}
+            className={"cell " + (c.on ? "on " : "") + (c.isToday ? "today " : "") + (c.future ? "future" : "")} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const CSS = `
@@ -1014,4 +1074,40 @@ const CSS = `
 .aimodal-save:disabled { opacity: .5; cursor: not-allowed; }
 .aimodal-save.loading { opacity: .7; }
 .aimodal-current { font-size: 11.5px; color: #9a8c78; margin-top: 12px; text-align: center; }
+
+/* ─── iPhone safe-area / Dynamic Island ─── */
+.shell { padding-top: calc(env(safe-area-inset-top) + 20px) !important; }
+.root { overscroll-behavior: none; }
+
+/* ─── Segment pill alignment fix ─── */
+.segpill { left: 4px; }
+
+/* ─── Goal edit ─── */
+button.tagline { appearance: none; border: none; cursor: pointer; font-family: inherit; }
+.goaledittag { transition: opacity .2s; }
+.goaledittag:active { opacity: .75; }
+.goaleditrow { display: flex; align-items: flex-end; gap: 7px; }
+.goaleditfield { display: flex; flex-direction: column; gap: 3px; }
+.goaleditfield span { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: #9a8c78; font-weight: 600; margin-left: 2px; }
+.goaleditfield input { width: 62px; background: rgba(34,29,23,.05); border: 1px solid rgba(34,29,23,.15); border-radius: 10px; color: #221d17; font-size: 16px; font-weight: 700; padding: 7px 8px; outline: none; text-align: center; font-family: inherit; }
+.goaleditfield input:focus { border-color: #a87a4e; }
+.goaleditok { width: 36px; height: 36px; border-radius: 10px; border: none; background: #221d17; color: #f3ecdf; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: transform .2s; }
+.goaleditok:active { transform: scale(.92); }
+
+/* ─── Confirm CTA ─── */
+.cta.confirm { background: #a87a4e; box-shadow: 0 12px 28px rgba(168,122,78,.35); }
+
+/* ─── Lift selector arrow ─── */
+.liftselwrap { position: relative; }
+.liftselarrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #6f6151; pointer-events: none; }
+
+/* ─── Heatmap day labels ─── */
+.heat-header { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 5px; }
+.heat-daylabel { text-align: center; font-size: 10px; font-weight: 600; color: #b0a288; text-transform: uppercase; letter-spacing: .3px; }
+.cell.future { opacity: .25; }
+
+/* ─── iOS input zoom prevention (font-size must be ≥16px) ─── */
+.editname { font-size: 16px !important; }
+.editreps { font-size: 16px !important; }
 `;
+
