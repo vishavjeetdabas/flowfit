@@ -10,7 +10,8 @@ import {
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut as fbSignOut,
 } from "firebase/auth";
 import { db, auth, googleProvider, isFirebaseConfigured } from "./firebase";
@@ -51,6 +52,14 @@ export function useFirebaseSync() {
   const unsubsRef = useRef([]);
   const stateRef = useRef({}); // track latest state to avoid write loops
 
+  // Handle redirect result on page load (iOS Safari uses redirect, not popup)
+  useEffect(() => {
+    if (!isFirebaseConfigured()) return;
+    getRedirectResult(auth).catch((err) => {
+      console.error("Redirect sign-in error:", err);
+    });
+  }, []);
+
   // Listen to auth state
   useEffect(() => {
     if (!isFirebaseConfigured()) {
@@ -64,11 +73,11 @@ export function useFirebaseSync() {
     return () => unsub();
   }, []);
 
-  // Sign in
+  // Sign in — uses redirect (works on iOS Safari; popup is blocked)
   const signIn = useCallback(async () => {
     if (!isFirebaseConfigured()) return;
     try {
-      await signInWithPopup(auth, googleProvider);
+      await signInWithRedirect(auth, googleProvider);
     } catch (err) {
       console.error("Sign-in error:", err);
     }

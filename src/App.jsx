@@ -569,11 +569,13 @@ export default function App() {
 
             <div className="card logger">
               <div className="loggerhead">Log {mConf.label.toLowerCase()}</div>
+              <div className="fieldcol loggerdatefield">
+                <span className="numlabel">Date</span>
+                <input type="date" className="dateinput" aria-label="Reading date" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
+              </div>
               <div className="loggerrow">
-                <div className="fieldcol"><span className="numlabel">Date</span>
-                  <input type="date" className="dateinput" aria-label="Reading date" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
-                </div>
-                <div className="fieldcol"><span className="numlabel">{mConf.unit}</span>
+                <div className="fieldcol">
+                  <span className="numlabel">{mConf.unit}</span>
                   <input inputMode="decimal" className="valinput" aria-label={`${mConf.label} value in ${mConf.unit}`} placeholder="0" value={bVal} onChange={(e) => setBVal(e.target.value)} />
                 </div>
                 <button type="button" className="addbtn" onClick={addBody}>Save</button>
@@ -1109,5 +1111,11 @@ button.tagline { appearance: none; border: none; cursor: pointer; font-family: i
 /* ─── iOS input zoom prevention (font-size must be ≥16px) ─── */
 .editname { font-size: 16px !important; }
 .editreps { font-size: 16px !important; }
+
+/* ─── Body logger: date on top, value+save below ─── */
+.loggerdatefield { margin-bottom: 10px; }
+.loggerdatefield .dateinput { width: 100%; font-size: 16px; }
+.loggerrow .valinput { font-size: 16px; }
+.addbtn { min-width: 80px; height: 48px; font-size: 15px; border-radius: 14px; }
 `;
 
