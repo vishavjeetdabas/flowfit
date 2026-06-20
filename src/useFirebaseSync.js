@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
+  signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
   signOut as fbSignOut,
@@ -52,20 +53,18 @@ export function useFirebaseSync() {
   const unsubsRef = useRef([]);
   const stateRef = useRef({}); // track latest state to avoid write loops
 
-  // Handle redirect result on page load (iOS Safari uses redirect, not popup)
-  useEffect(() => {
-    if (!isFirebaseConfigured()) return;
-    getRedirectResult(auth).catch((err) => {
-      console.error("Redirect sign-in error:", err);
-    });
-  }, []);
-
-  // Listen to auth state
+  // Listen to auth state + handle any pending redirect result
   useEffect(() => {
     if (!isFirebaseConfigured()) {
       setAuthLoading(false);
       return;
     }
+
+    // Pick up result if user came back from signInWithRedirect fallback
+    getRedirectResult(auth)
+      .then((result) => { if (result?.user) setUser(result.user); })
+      .catch((err) => { if (err.code !== "auth/no-auth-event") console.warn("Redirect result:", err.code); });
+
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -73,13 +72,18 @@ export function useFirebaseSync() {
     return () => unsub();
   }, []);
 
-  // Sign in — uses redirect (works on iOS Safari; popup is blocked)
+  // Sign in — popup (now that domain is authorized); redirect fallback if popup blocked
   const signIn = useCallback(async () => {
     if (!isFirebaseConfigured()) return;
     try {
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithPopup(auth, googleProvider);
     } catch (err) {
-      console.error("Sign-in error:", err);
+      if (err.code === "auth/popup-blocked") {
+        // iOS Safari blocks automatic popups — fall back to redirect
+        await signInWithRedirect(auth, googleProvider);
+      } else if (err.code !== "auth/popup-closed-by-user") {
+        console.error("Sign-in error:", err.code);
+      }
     }
   }, []);
 

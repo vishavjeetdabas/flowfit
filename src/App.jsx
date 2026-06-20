@@ -56,10 +56,10 @@ const DEFAULT_DAYS = [
 const WEEK_MAP = { 0: "rest", 1: "pushA", 2: "pullA", 3: "legsA", 4: "pushB", 5: "pullB", 6: "legsB" };
 const REST_PRESETS = [60, 90, 120, 180];
 const METRICS = [
-  { k: "weight", label: "Weight", unit: "kg", goal: true },
-  { k: "chest", label: "Chest", unit: "cm" },
-  { k: "bicep", label: "Biceps", unit: "cm" },
-  { k: "waist", label: "Waist", unit: "cm" },
+  { k: "weight", label: "Weight", unit: "kg", goal: true, step: 0.5 },
+  { k: "chest", label: "Chest", unit: "cm", step: 0.5 },
+  { k: "bicep", label: "Biceps", unit: "cm", step: 0.5 },
+  { k: "waist", label: "Waist", unit: "cm", step: 0.5 },
 ];
 
 /* ---------------- helpers ---------------- */
@@ -571,15 +571,12 @@ export default function App() {
               <div className="loggerhead">Log {mConf.label.toLowerCase()}</div>
               <div className="fieldcol loggerdatefield">
                 <span className="numlabel">Date</span>
-                <input type="date" className="dateinput" aria-label="Reading date" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
+                <input type="date" className="dateinput logdateinput" aria-label="Reading date" value={bDate} max={todayISO()} onChange={(e) => setBDate(e.target.value)} />
               </div>
-              <div className="loggerrow">
-                <div className="fieldcol">
-                  <span className="numlabel">{mConf.unit}</span>
-                  <input inputMode="decimal" className="valinput" aria-label={`${mConf.label} value in ${mConf.unit}`} placeholder="0" value={bVal} onChange={(e) => setBVal(e.target.value)} />
-                </div>
-                <button type="button" className="addbtn" onClick={addBody}>Save</button>
-              </div>
+              <NumField label={mConf.unit} step={mConf.step} value={bVal} onChange={setBVal} />
+              <button type="button" className="cta logcta" onClick={addBody}>
+                <Check size={16} /> Save {mConf.label.toLowerCase()}
+              </button>
               <div className="hint">Tip: change the date to backfill your old readings.</div>
             </div>
 
@@ -1112,10 +1109,9 @@ button.tagline { appearance: none; border: none; cursor: pointer; font-family: i
 .editname { font-size: 16px !important; }
 .editreps { font-size: 16px !important; }
 
-/* ─── Body logger: date on top, value+save below ─── */
-.loggerdatefield { margin-bottom: 10px; }
-.loggerdatefield .dateinput { width: 100%; font-size: 16px; }
-.loggerrow .valinput { font-size: 16px; }
-.addbtn { min-width: 80px; height: 48px; font-size: 15px; border-radius: 14px; }
+/* ─── Body logger: fully stacked, stepper-based ─── */
+.loggerdatefield { margin-bottom: 12px; }
+.logdateinput { width: 100%; font-size: 16px; }
+.logcta { margin-top: 12px; padding: 14px; font-size: 15px; box-shadow: none; }
 `;
 
